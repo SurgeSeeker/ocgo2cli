@@ -107,11 +107,10 @@ func TransformRequest(anthropicReq *MessageRequest, model ModelConfig) (*ChatCom
 		}
 	} else if model.Thinking != nil || model.ReasoningEffort != nil {
 		// Model config wants thinking but no thinking in history —
-		// must send disabled or DeepSeek/Qwen may reject
+		// must send disabled or DeepSeek/Qwen may reject.
+		// When forcing disabled, do NOT include reasoning_effort —
+		// DeepSeek rejects the combination.
 		req.Thinking = json.RawMessage(`{"type":"disabled"}`)
-		if model.ReasoningEffort != nil {
-			req.ReasoningEffort = model.ReasoningEffort
-		}
 	}
 
 	return req, nil

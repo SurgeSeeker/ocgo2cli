@@ -44,9 +44,10 @@ jobs:
 
       - name: Build
         run: |
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
           mkdir -p dist
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -ldflags="-s -w" \
+            go build -ldflags="-s -w -X main.Version=${VERSION}" \
             -o dist/ocgo2cli-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }} .
 
       - name: Upload artifact

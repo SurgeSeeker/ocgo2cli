@@ -15,8 +15,9 @@ import (
 	"github.com/kardianos/service"
 )
 
-// Version is the current version of ocgo2cli.
-const Version = "1.0.0"
+// Version is set via ldflags at build time.
+// Defaults to "dev" when built with `go build` directly.
+var Version = "dev"
 
 var cfg *Config
 

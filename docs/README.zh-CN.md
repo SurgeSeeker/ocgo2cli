@@ -132,7 +132,7 @@ make clean    # 清理
 
 ## 致谢
 
-格式转换基于 [oc-go-cc](https://github.com/nousresearch/oc-go-cc)（Nous Research）。
+格式转换基于 [oc-go-cc](https://github.com/samueltuyizere/oc-go-cc)（Nous Research）。
 
 ## 许可证
 

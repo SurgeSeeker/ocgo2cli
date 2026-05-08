@@ -132,7 +132,7 @@ make clean    # Clean artifacts
 
 ## Credits
 
-Format conversion based on [oc-go-cc](https://github.com/nousresearch/oc-go-cc) by Nous Research.
+Format conversion based on [oc-go-cc](https://github.com/samueltuyizere/oc-go-cc) by Nous Research.
 
 ## License
 

@@ -99,7 +99,7 @@ Config file: `~/.config/ocgo2cli/config.json`
 
 ## Format Conversion Reference
 
-This project's transformer code references [oc-go-cc](https://github.com/nousresearch/oc-go-cc):
+This project's transformer code references [oc-go-cc](https://github.com/samueltuyizere/oc-go-cc):
 - `internal/transformer/request.go` — Anthropic→OpenAI conversion
 - `internal/transformer/response.go` — OpenAI→Anthropic conversion
 - `internal/transformer/stream.go` — SSE streaming conversion

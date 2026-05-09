@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/kardianos/service"
 )
@@ -24,7 +26,8 @@ var cfg *Config
 // program implements service.Interface for daemon management.
 type program struct {
 	srv           *http.Server
-	serverStarted chan error // receives result of ListenAndServe
+	serverStarted chan error
+	wg            sync.WaitGroup
 }
 
 func (p *program) Start(s service.Service) error {
@@ -47,11 +50,10 @@ func (p *program) Start(s service.Service) error {
 func (p *program) runServer() {
 	p.srv = &http.Server{
 		Addr:    cfg.Listen,
-		Handler: newServeMux(),
+		Handler: trackingMiddleware(p, newServeMux()),
 	}
 
 	log.Printf("ocgo2cli listening on %s", cfg.Listen)
-	// Signal that the server has started (non-blocking).
 	select {
 	case p.serverStarted <- nil:
 	default:
@@ -68,9 +70,24 @@ func (p *program) runServer() {
 func (p *program) Stop(s service.Service) error {
 	log.Println("ocgo2cli shutting down...")
 	if p.srv != nil {
-		return p.srv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := p.srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
 	}
+	p.wg.Wait()
+	log.Println("shutdown complete")
 	return nil
+}
+
+// trackingMiddleware wraps each request with in-flight tracking for graceful shutdown.
+func trackingMiddleware(p *program, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.wg.Add(1)
+		defer p.wg.Done()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // newServeMux creates a configured ServeMux with all routes registered.

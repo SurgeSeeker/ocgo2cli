@@ -77,8 +77,85 @@ func (p *program) Stop(s service.Service) error {
 func newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", handleMessages)
+	mux.HandleFunc("/v1/messages/count_tokens", handleCountTokens)
+	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
 	return mux
+}
+
+// handleCountTokens returns a stub token count response in Anthropic format.
+// Accurate counting would require running the tokenizer locally; this enables
+// Claude Code to proceed without error while ocgo2cli estimates from input length.
+func handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_000_000))
+	if err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "request too large")
+		return
+	}
+	defer r.Body.Close()
+
+	var req MessageRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	inputText := req.SystemText()
+	for _, msg := range req.Messages {
+		if blocks, err := msg.ContentBlocks(); err == nil {
+			for _, b := range blocks {
+				if b.Type == "text" {
+					inputText += b.Text
+				}
+			}
+		}
+	}
+
+	estimatedTokens := len(inputText) / 4
+	if estimatedTokens < 1 {
+		estimatedTokens = 1
+	}
+
+	resp := map[string]interface{}{
+		"input_tokens":  estimatedTokens,
+		"output_tokens": 0,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleModels returns the list of configured Claude model names from the config.
+func handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+
+	var modelList []map[string]interface{}
+	for name := range cfg.Models {
+		modelList = append(modelList, map[string]interface{}{
+			"id":      name,
+			"object":  "model",
+			"created": 0,
+			"owned_by": "ocgo2cli",
+		})
+	}
+
+	if modelList == nil {
+		modelList = []map[string]interface{}{}
+	}
+
+	resp := map[string]interface{}{
+		"object": "list",
+		"data":   modelList,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // runForeground starts the HTTP server in the foreground (for debug/manual use).
@@ -197,10 +274,9 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read body
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10_000_000))
 	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "failed to read request body")
+		writeAnthropicError(w, http.StatusBadRequest, "request too large")
 		return
 	}
 	defer r.Body.Close()

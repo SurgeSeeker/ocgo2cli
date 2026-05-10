@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/kardianos/service"
 )
@@ -24,15 +26,17 @@ var cfg *Config
 // program implements service.Interface for daemon management.
 type program struct {
 	srv           *http.Server
-	serverStarted chan error // receives result of ListenAndServe
+	serverStarted chan error
+	wg            sync.WaitGroup
 }
 
 func (p *program) Start(s service.Service) error {
-	// Start should not block. Run server in a goroutine.
 	log.Printf("ocgo2cli daemon starting on %s", cfg.Listen)
+	if err := writePID(); err != nil {
+		log.Printf("Warning: could not write PID file: %v", err)
+	}
 	p.serverStarted = make(chan error, 1)
 	go p.runServer()
-	// Wait briefly for the server to start or fail.
 	select {
 	case err := <-p.serverStarted:
 		if err != nil {
@@ -47,11 +51,10 @@ func (p *program) Start(s service.Service) error {
 func (p *program) runServer() {
 	p.srv = &http.Server{
 		Addr:    cfg.Listen,
-		Handler: newServeMux(),
+		Handler: trackingMiddleware(p, newServeMux()),
 	}
 
 	log.Printf("ocgo2cli listening on %s", cfg.Listen)
-	// Signal that the server has started (non-blocking).
 	select {
 	case p.serverStarted <- nil:
 	default:
@@ -68,17 +71,109 @@ func (p *program) runServer() {
 func (p *program) Stop(s service.Service) error {
 	log.Println("ocgo2cli shutting down...")
 	if p.srv != nil {
-		return p.srv.Shutdown(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := p.srv.Shutdown(ctx); err != nil {
+			log.Printf("shutdown error: %v", err)
+		}
 	}
+	p.wg.Wait()
+	log.Println("shutdown complete")
 	return nil
+}
+
+// trackingMiddleware wraps each request with in-flight tracking for graceful shutdown.
+func trackingMiddleware(p *program, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.wg.Add(1)
+		defer p.wg.Done()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // newServeMux creates a configured ServeMux with all routes registered.
 func newServeMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/messages", handleMessages)
+	mux.HandleFunc("/v1/messages/count_tokens", handleCountTokens)
+	mux.HandleFunc("/v1/models", handleModels)
 	mux.HandleFunc("/health", handleHealth)
 	return mux
+}
+
+// handleCountTokens returns a stub token count response in Anthropic format.
+// Accurate counting would require running the tokenizer locally; this enables
+// Claude Code to proceed without error while ocgo2cli estimates from input length.
+func handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "only POST is supported")
+		return
+	}
+
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1_000_000))
+	if err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "request too large")
+		return
+	}
+	defer r.Body.Close()
+
+	var req MessageRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	inputText := req.SystemText()
+	for _, msg := range req.Messages {
+		if blocks, err := msg.ContentBlocks(); err == nil {
+			for _, b := range blocks {
+				if b.Type == "text" {
+					inputText += b.Text
+				}
+			}
+		}
+	}
+
+	estimatedTokens := len(inputText) / 4
+	if estimatedTokens < 1 {
+		estimatedTokens = 1
+	}
+
+	resp := map[string]interface{}{
+		"input_tokens":  estimatedTokens,
+		"output_tokens": 0,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// handleModels returns the list of configured Claude model names from the config.
+func handleModels(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAnthropicError(w, http.StatusMethodNotAllowed, "only GET is supported")
+		return
+	}
+
+	var modelList []map[string]interface{}
+	for name := range cfg.Models {
+		modelList = append(modelList, map[string]interface{}{
+			"id":      name,
+			"object":  "model",
+			"created": 0,
+			"owned_by": "ocgo2cli",
+		})
+	}
+
+	if modelList == nil {
+		modelList = []map[string]interface{}{}
+	}
+
+	resp := map[string]interface{}{
+		"object": "list",
+		"data":   modelList,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
 }
 
 // runForeground starts the HTTP server in the foreground (for debug/manual use).
@@ -131,6 +226,8 @@ func main() {
 	loadConfigOrDie(resolvedPath)
 	initHTTPClient()
 
+	initHTTPClient()
+
 	// Determine the command (first non-flag arg).
 	args := flag.Args()
 	cmd := ""
@@ -143,7 +240,23 @@ func main() {
 	case "version":
 		fmt.Printf("ocgo2cli version %s\n", Version)
 		os.Exit(0)
+	case "status":
+		pid, err := readPID()
+		if err != nil {
+			log.Fatalf("status: %v", err)
+		}
+		if isProcessRunning(pid) {
+			fmt.Printf("ocgo2cli is running (PID: %d)\n", pid)
+		} else {
+			fmt.Printf("ocgo2cli PID file exists but process %d is not running\n", pid)
+			removePID()
+		}
+		os.Exit(0)
 	case "run":
+		if err := writePID(); err != nil {
+			log.Printf("Warning: could not write PID file: %v", err)
+		}
+		defer removePID()
 		runForeground()
 		return
 	}
@@ -196,10 +309,9 @@ func handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read body
-	body, err := io.ReadAll(r.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10_000_000))
 	if err != nil {
-		writeAnthropicError(w, http.StatusBadRequest, "failed to read request body")
+		writeAnthropicError(w, http.StatusBadRequest, "request too large")
 		return
 	}
 	defer r.Body.Close()

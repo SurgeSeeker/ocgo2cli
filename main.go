@@ -224,6 +224,7 @@ func main() {
 
 	// Load config globally.
 	loadConfigOrDie(resolvedPath)
+	initHTTPClient()
 
 	initHTTPClient()
 

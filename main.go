@@ -129,6 +129,7 @@ func main() {
 
 	// Load config globally.
 	loadConfigOrDie(resolvedPath)
+	initHTTPClient()
 
 	// Determine the command (first non-flag arg).
 	args := flag.Args()
@@ -251,7 +252,7 @@ func handleAnthropicNative(w http.ResponseWriter, r *http.Request, rawBody []byt
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+resolveEnv(cfg.APIKey))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadGateway, fmt.Sprintf("upstream error: %v", err))
 		return
@@ -340,7 +341,7 @@ func handleOpenAIModel(w http.ResponseWriter, r *http.Request, anthropicReq *Mes
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+resolveEnv(cfg.APIKey))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		writeAnthropicError(w, http.StatusBadGateway, fmt.Sprintf("upstream error: %v", err))
 		return

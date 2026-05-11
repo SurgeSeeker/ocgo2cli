@@ -3,10 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -393,9 +393,12 @@ func (s *streamState) flush() {
 func generateID() string {
 	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 18)
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	_, err := rand.Read(b)
+	if err != nil {
+		return fmt.Sprintf("msg_%d", time.Now().UnixNano())
+	}
 	for i := range b {
-		b[i] = charset[r.Intn(len(charset))]
+		b[i] = charset[int(b[i])%len(charset)]
 	}
 	return "msg_" + string(b)
 }

@@ -682,3 +682,73 @@ func TestSystemText(t *testing.T) {
 // Helpers
 func strPtr(s string) *string { return &s }
 func float64Ptr(f float64) *float64 { return &f }
+
+func TestStripOrphanedToolCalls(t *testing.T) {
+	t.Run("last message is assistant with tool_calls", func(t *testing.T) {
+		msgs := []ChatMessage{
+			{Role: "user", Content: "do something"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc_1", Type: "function", Function: FunctionCall{Name: "bash", Arguments: "{}"}}}},
+		}
+		result := stripOrphanedToolCalls(msgs)
+		if len(result[len(result)-1].ToolCalls) != 0 {
+			t.Error("expected orphaned tool_calls to be stripped")
+		}
+	})
+
+	t.Run("last message is assistant without tool_calls", func(t *testing.T) {
+		msgs := []ChatMessage{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "world"},
+		}
+		result := stripOrphanedToolCalls(msgs)
+		if result[len(result)-1].Content != "world" {
+			t.Error("expected message content preserved")
+		}
+	})
+
+	t.Run("assistant tool_calls followed by tool response", func(t *testing.T) {
+		msgs := []ChatMessage{
+			{Role: "user", Content: "run command"},
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc_1", Type: "function", Function: FunctionCall{Name: "bash", Arguments: "{}"}}}},
+			{Role: "tool", Content: "output", ToolCallID: "tc_1"},
+			{Role: "assistant", Content: "done"},
+		}
+		result := stripOrphanedToolCalls(msgs)
+		last := result[len(result)-1]
+		if last.Content != "done" {
+			t.Error("expected final text content preserved")
+		}
+	})
+
+	t.Run("empty messages", func(t *testing.T) {
+		result := stripOrphanedToolCalls([]ChatMessage{})
+		if len(result) != 0 {
+			t.Error("expected empty result")
+		}
+	})
+
+	t.Run("single assistant with tool_calls and no follow-up", func(t *testing.T) {
+		msgs := []ChatMessage{
+			{Role: "assistant", ToolCalls: []ToolCall{{ID: "tc_1", Type: "function", Function: FunctionCall{Name: "bash", Arguments: "{}"}}}},
+		}
+		result := stripOrphanedToolCalls(msgs)
+		if len(result[len(result)-1].ToolCalls) != 0 {
+			t.Error("expected single orphaned tool_calls to be stripped")
+		}
+	})
+
+	t.Run("assistant with text and tool_calls, no follow-up", func(t *testing.T) {
+		msgs := []ChatMessage{
+			{Role: "user", Content: "do it"},
+			{Role: "assistant", Content: "Let me run that:", ToolCalls: []ToolCall{{ID: "tc_1", Type: "function", Function: FunctionCall{Name: "bash", Arguments: "{\"cmd\":\"ls\"}"}}}},
+		}
+		result := stripOrphanedToolCalls(msgs)
+		last := result[len(result)-1]
+		if len(last.ToolCalls) != 0 {
+			t.Error("expected tool_calls stripped")
+		}
+		if last.Content != "Let me run that:" {
+			t.Error("expected text content preserved")
+		}
+	})
+}

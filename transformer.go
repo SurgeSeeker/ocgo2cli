@@ -59,6 +59,11 @@ func TransformRequest(anthropicReq *MessageRequest, model ModelConfig) (*ChatCom
 		openaiMessages = append(openaiMessages, transformed...)
 	}
 
+	// Strip orphaned tool_calls: DeepSeek rejects trailing assistant tool_calls
+	// with no following tool response. This happens when Claude Code is interrupted
+	// mid-conversation and the tool_result never arrives.
+	openaiMessages = stripOrphanedToolCalls(openaiMessages)
+
 	// Build request
 	req := &ChatCompletionRequest{
 		Model:       model.ModelID,
@@ -366,4 +371,15 @@ func mapHTTPToAnthropicError(statusCode int) string {
 	default:
 		return "api_error"
 	}
+}
+
+func stripOrphanedToolCalls(msgs []ChatMessage) []ChatMessage {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role == "assistant" && len(last.ToolCalls) > 0 {
+		msgs[len(msgs)-1].ToolCalls = nil
+	}
+	return msgs
 }
